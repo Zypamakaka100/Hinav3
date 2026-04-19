@@ -1,25 +1,332 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
-// Logo Component
+// ── Logo ─────────────────────────────────────────────────────────
 const Logo28 = ({ size = 44 }) => (
   <div style={{
     width: size, height: size, borderRadius: size * 0.22,
-    background: "linear-gradient(145deg, #ff6b00, #ff9500, #ffb700)",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    boxShadow: `0 0 ${size * 0.4}px rgba(255,107,0,0.6), inset 0 1px 0 rgba(255,255,255,0.22)`,
-    flexShrink: 0, position: "relative", overflow: "hidden"
+    background: "linear-gradient(145deg,#ff6b00,#ff9500,#ffb700)",
+    display:"flex", alignItems:"center", justifyContent:"center",
+    boxShadow:`0 0 ${size*0.4}px rgba(255,107,0,0.6), inset 0 1px 0 rgba(255,255,255,0.22)`,
+    flexShrink:0, position:"relative", overflow:"hidden",
   }}>
-    <div style={{ position: "absolute", inset: 0, background: "radial-gradient(circle at 35% 30%, rgba(255,255,255,0.22) 0%, transparent 60%)" }} />
-    <span style={{ fontSize: size * 0.42, fontWeight: 900, color: "#fff", fontFamily: "'Georgia', serif", textShadow: "0 2px 6px rgba(0,0,0,0.35)", letterSpacing: "-1px" }}>28</span>
+    <div style={{position:"absolute",inset:0,background:"radial-gradient(circle at 35% 30%,rgba(255,255,255,0.22) 0%,transparent 60%)"}}/>
+    <span style={{fontSize:size*0.42,fontWeight:900,color:"#fff",fontFamily:"'Georgia',serif",
+      textShadow:"0 2px 6px rgba(0,0,0,0.35)",letterSpacing:"-1px",position:"relative"}}>28</span>
+  </div>
+);
+
+// ── Crosshair Renderer ──────────────────────────────────────────
+const CrosshairPreview = ({ cfg, bg="#111", size=160 }) => {
+  const cx = size/2, cy = size/2;
+  const { color, style, gap, thickness, length, dot, dotSize, opacity, outline } = cfg;
+  const c = color;
+  const oc = outline ? "#000" : "transparent";
+  const ot = outline ? thickness + 2 : 0;
+
+  const lines = style === "circle"
+    ? null
+    : [
+        { x1: cx - (gap + length), y1: cy, x2: cx - gap, y2: cy },
+        { x1: cx + gap, y1: cy, x2: cx + gap + length, y2: cy },
+        { x1: cx, y1: cy - (gap + length), x2: cx, y2: cy - gap },
+        { x1: cx, y1: cy + gap, x2: cx, y2: cy + gap + length },
+        ...(style === "x" ? [
+          { x1: cx - (gap + length) * 0.7, y1: cy - (gap + length) * 0.7, x2: cx - gap * 0.7, y2: cy - gap * 0.7 },
+          { x1: cx + gap * 0.7, y1: cy + gap * 0.7, x2: cx + (gap + length) * 0.7, y2: cy + (gap + length) * 0.7 },
+          { x1: cx + (gap + length) * 0.7, y1: cy - (gap + length) * 0.7, x2: cx + gap * 0.7, y2: cy - gap * 0.7 },
+          { x1: cx - gap * 0.7, y1: cy + gap * 0.7, x2: cx - (gap + length) * 0.7, y2: cy + (gap + length) * 0.7 },
+        ] : []),
+      ];
+
+  return (
+    <svg width={size} height={size} style={{ background: bg, borderRadius: 8, display: "block" }}>
+      {outline && lines && lines.map((l, i) => (
+        <line key={`o${i}`} {...l} stroke={oc} strokeWidth={ot} strokeLinecap="round" opacity={opacity / 100} />
+      ))}
+      {lines && lines.map((l, i) => (
+        <line key={i} {...l} stroke={c} strokeWidth={thickness} strokeLinecap="round" opacity={opacity / 100} />
+      ))}
+      {style === "circle" && (
+        <>
+          {outline && <circle cx={cx} cy={cy} r={gap + length} stroke={oc} strokeWidth={ot} fill="none" opacity={opacity / 100} />}
+          <circle cx={cx} cy={cy} r={gap + length} stroke={c} strokeWidth={thickness} fill="none" opacity={opacity / 100} />
+        </>
+      )}
+      {dot && (
+        <>
+          {outline && <circle cx={cx} cy={cy} r={dotSize + 1} fill={oc} opacity={opacity / 100} />}
+          <circle cx={cx} cy={cy} r={dotSize} fill={c} opacity={opacity / 100} />
+        </>
+      )}
+    </svg>
+  );
+};
+
+// ── Aim Trainer ─────────────────────────────────────────────────
+const AimTrainer = ({ crosshairCfg }) => {
+  const canvasRef = useRef(null);
+  const stateRef = useRef({ targets: [], score: 0, misses: 0, active: false, startTime: 0, timeLeft: 20 });
+  const rafRef = useRef(null);
+  const timerRef = useRef(null);
+  const [display, setDisplay] = useState({ score: 0, misses: 0, timeLeft: 20, active: false, best: 0, result: null });
+
+  const spawnTarget = useCallback((canvas) => {
+    const margin = 40;
+    return {
+      x: margin + Math.random() * (canvas.width - margin * 2),
+      y: margin + Math.random() * (canvas.height - margin * 2),
+      r: 18 + Math.random() * 22,
+      born: performance.now(),
+      life: 1200 + Math.random() * 800,
+      hit: false,
+    };
+  }, []);
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const s = stateRef.current;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // bg grid
+    ctx.strokeStyle = "rgba(255,107,0,0.06)";
+    ctx.lineWidth = 1;
+    for (let x = 0; x < canvas.width; x += 32) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke(); }
+    for (let y = 0; y < canvas.height; y += 32) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke(); }
+
+    const now = performance.now();
+    s.targets = s.targets.filter(t => !t.hit && (now - t.born) < t.life);
+    if (s.active && s.targets.length < 4 && Math.random() < 0.04) s.targets.push(spawnTarget(canvas));
+
+    s.targets.forEach(t => {
+      const age = (now - t.born) / t.life;
+      const alpha = age < 0.15 ? age / 0.15 : age > 0.75 ? 1 - (age - 0.75) / 0.25 : 1;
+      const pulse = 1 + Math.sin(now * 0.008) * 0.06;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, t.r * pulse, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,107,0,${alpha * 0.5})`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      const grad = ctx.createRadialGradient(t.x, t.y, 0, t.x, t.y, t.r * pulse);
+      grad.addColorStop(0, `rgba(255,160,0,${alpha * 0.8})`);
+      grad.addColorStop(0.6, `rgba(255,80,0,${alpha * 0.4})`);
+      grad.addColorStop(1, `rgba(255,50,0,${alpha * 0.05})`);
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, t.r * pulse, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255,220,100,${alpha})`;
+      ctx.fill();
+    });
+
+    rafRef.current = requestAnimationFrame(draw);
+  }, [spawnTarget]);
+
+  const startGame = () => {
+    const s = stateRef.current;
+    s.targets = []; s.score = 0; s.misses = 0; s.active = true; s.timeLeft = 20;
+    setDisplay(d => ({ ...d, score: 0, misses: 0, timeLeft: 20, active: true, result: null }));
+    
+    clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      stateRef.current.timeLeft--;
+      const tl = stateRef.current.timeLeft;
+      if (tl <= 0) {
+        clearInterval(timerRef.current);
+        stateRef.current.active = false;
+        setDisplay(prev => {
+          const newBest = Math.max(prev.best, stateRef.current.score);
+          return { ...prev, active: false, timeLeft: 0, best: newBest, result: { score: stateRef.current.score, misses: stateRef.current.misses, best: newBest } };
+        });
+      } else {
+        setDisplay(prev => ({ ...prev, timeLeft: tl }));
+      }
+    }, 1000);
+  };
+
+  const handleClick = (e) => {
+    const s = stateRef.current;
+    if (!s.active) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    let hit = false;
+    s.targets.forEach(t => {
+      const dx = mx - t.x, dy = my - t.y;
+      if (!t.hit && dx * dx + dy * dy < (t.r + 4) * (t.r + 4)) { t.hit = true; s.score++; hit = true; }
+    });
+    if (!hit) s.misses++;
+    setDisplay(d => ({ ...d, score: s.score, misses: s.misses }));
+  };
+
+  useEffect(() => {
+    rafRef.current = requestAnimationFrame(draw);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      clearInterval(timerRef.current);
+    };
+  }, [draw]);
+
+  const acc = display.score + display.misses > 0 ? Math.round(display.score / (display.score + display.misses) * 100) : 0;
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: "8px", marginBottom: "10px" }}>
+        {[["HITS", display.score, "#ff9500"], ["MISSES", display.misses, "#ef4444"], ["ACC", `${acc}%`, "#fbbf24"], ["TIME", `${display.timeLeft}s`, "#38bdf8"]].map(([l, v, c]) => (
+          <div key={l} style={{ flex: 1, background: "rgba(20,10,0,0.9)", border: `1px solid ${c}33`, borderRadius: 8, padding: "8px 0", textAlign: "center" }}>
+            <div style={{ fontSize: 9, letterSpacing: 2, color: "#a08060" }}>{l}</div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: c, fontFamily: "'Georgia',serif" }}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", border: "1px solid rgba(255,107,0,0.2)" }}>
+        <canvas
+          ref={canvasRef} width={360} height={240}
+          onClick={handleClick}
+          style={{ display: "block", width: "100%", height: "auto", cursor: display.active ? "crosshair" : "default", background: "#0a0500" }}
+        />
+        {!display.active && !display.result && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.65)" }}>
+            <div style={{ fontSize: 13, color: "#ff9500", fontStyle: "italic", marginBottom: 12 }}>20 seconds · tap targets · go!</div>
+            <button onClick={startGame} style={{ padding: "12px 28px", background: "linear-gradient(135deg,#ff6b00,#ffb700)", border: "none", borderRadius: 10, color: "#fff", fontSize: 14, fontWeight: "bold", cursor: "pointer", boxShadow: "0 0 24px rgba(255,107,0,0.5)" }}>START AIM DRILL</button>
+          </div>
+        )}
+        {display.result && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.8)", gap: 8 }}>
+            <div style={{ fontSize: 11, letterSpacing: 4, color: "#ff9500" }}>RESULT</div>
+            <div style={{ fontSize: 42, fontWeight: 900, color: "#ffb700", fontFamily: "'Georgia',serif" }}>{display.result.score}</div>
+            <div style={{ fontSize: 11, color: "#6a5040" }}>HITS · {display.result.misses} MISSES · {acc}% ACC</div>
+            <button onClick={startGame} style={{ marginTop: 8, padding: "10px 24px", background: "linear-gradient(135deg,#ff6b00,#ffb700)", border: "none", borderRadius: 10, color: "#fff", fontWeight: "bold", cursor: "pointer" }}>TRY AGAIN</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ── Main App ───────────────────────────────────────────────────
+const PUBG_TIPS = [
+  { icon: "🎯", title: "Gyroscope Sensitivity", tip: "Set gyro to 100–130% for close-range. Use wrist, not arm.", tag: "AIM" },
+  { icon: "🔭", title: "Scope Sensitivities", tip: "4× at 25–35%, 6× at 18–22%. Lower = steadier.", tag: "AIM" },
+  { icon: "🏃", title: "Peek & Fire", tip: "Always peek from cover, never stand still.", tag: "MOVE" },
+  { icon: "🎮", title: "Claw Grip Layout", tip: "Move fire button to upper right for thumb-ring claw.", tag: "CONTROL" },
+  { icon: "🔫", title: "Tap-Fire at Range", tip: "Spray only <30m. Tap-fire bursts beyond that.", tag: "COMBAT" },
+  { icon: "🧠", title: "Drop Hot, Die Fast", tip: "Hot drops build muscle memory 5× faster.", tag: "MINDSET" },
+  { icon: "🏠", title: "Third-Party Every Fight", tip: "Rush the winner when they reload.", tag: "STRATEGY" },
+  { icon: "🌀", title: "Frame Rate = Smooth Aim", tip: "Lock to 60fps stable. Use Hina to keep thermals low.", tag: "PERF" },
+  { icon: "🔊", title: "Headphones > Speakers", tip: "Audio is radar. Always use headphones.", tag: "AWARENESS" },
+  { icon: "🎒", title: "Carry 2 Guns Synergy", tip: "AR + sniper for open fields. AR + shotgun for buildings.", tag: "LOADOUT" },
+];
+
+const TAG_COLORS = { AIM: "#ff9500", MOVE: "#38bdf8", CONTROL: "#a78bfa", COMBAT: "#f87171", MINDSET: "#4ade80", STRATEGY: "#fbbf24", PERF: "#ff6b00", AWARENESS: "#e879f9", LOADOUT: "#fb923c" };
+const COOLING_TIPS_DATA = [
+  { id: 1, title: "Reduce Brightness", desc: "Drop 30% for instant GPU relief.", icon: "☀️", saving: 3 },
+  { id: 2, title: "Background Refresh", desc: "Stops apps fetching data.", icon: "🔄", saving: 2 },
+  { id: 3, title: "Low Power Mode", desc: "Throttles background only.", icon: "⚡", saving: 4 },
+  { id: 4, title: "Close Unused Apps", desc: "Free RAM = less heat.", icon: "📱", saving: 2 },
+  { id: 5, title: "Remove Case", desc: "Cases trap heat. Go bare.", icon: "🧊", saving: 5 },
+];
+
+const Slider = ({ label, value, min, max, step = 1, onChange, color = "#ff9500" }) => (
+  <div style={{ marginBottom: 10 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+      <span style={{ fontSize: 11, color: "#6a5040" }}>{label}</span>
+      <span style={{ fontSize: 11, fontWeight: "bold", color }}>{value}</span>
+    </div>
+    <input type="range" min={min} max={max} step={step} value={value} onChange={e => onChange(Number(e.target.value))} style={{ width: "100%", accentColor: color, cursor: "pointer" }} />
   </div>
 );
 
 export default function Hina() {
+  const [purchased, setPurchased] = useState(false);
+  const [tab, setTab] = useState("cool");
+  const [activeMode, setActiveMode] = useState(false);
+  const [temp, setTemp] = useState(43);
+  const [checkedTips, setCheckedTips] = useState({});
+  const [crosshair, setCrosshair] = useState({ color: "#ff4400", style: "cross", gap: 4, thickness: 2, length: 10, dot: true, dotSize: 2, opacity: 100, outline: false });
+  const intervalRef = useRef(null);
+
+  useEffect(() => {
+    if (activeMode) {
+      intervalRef.current = setInterval(() => {
+        setTemp(p => (p <= 28.5 ? 28.5 : parseFloat((p - 0.1).toFixed(1))));
+      }, 1000);
+    } else {
+      clearInterval(intervalRef.current);
+      setTemp(43);
+    }
+    return () => clearInterval(intervalRef.current);
+  }, [activeMode]);
+
+  const totalSaving = COOLING_TIPS_DATA.filter(t => checkedTips[t.id]).reduce((a, t) => a + t.saving, 0);
+
   return (
-    <div style={{ minHeight: "100vh", background: "#080808", color: "#f5f0e8", fontFamily: "sans-serif", padding: "20px" }}>
-      <Logo28 size={60} />
-      <h1 style={{ color: "#ff9500" }}>Hina Gaming Suite</h1>
-      <p>App is klaar voor gebruik. Alles werkt nu zonder fouten.</p>
+    <div style={{ minHeight: "100vh", background: "#0a0a0a", color: "#f5f0e8", padding: "20px", fontFamily: "serif" }}>
+      <div style={{ maxWidth: "400px", margin: "0 auto" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
+          <Logo28 size={50} />
+          <h1 style={{ margin: 0, fontSize: "28px" }}>Hina</h1>
+        </div>
+
+        {!purchased ? (
+          <div style={{ border: "1px solid #ff9500", padding: "20px", borderRadius: "15px", textAlign: "center" }}>
+            <p>Unlock the 28× Gaming Suite</p>
+            <button onClick={() => setPurchased(true)} style={{ background: "#ff9500", border: "none", padding: "15px 30px", borderRadius: "10px", color: "white", fontWeight: "bold", cursor: "pointer" }}>UNLOCK — $0.88</button>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: "5px", marginBottom: "20px" }}>
+              {["cool", "cross", "aim", "pubg"].map(t => (
+                <button key={t} onClick={() => setTab(t)} style={{ flex: 1, padding: "10px", background: tab === t ? "#ff9500" : "#1a1a1a", color: "white", border: "none", borderRadius: "5px", cursor: "pointer" }}>{t.toUpperCase()}</button>
+              ))}
+            </div>
+
+            {tab === "cool" && (
+              <div>
+                <div style={{ background: "#1a1a1a", padding: "20px", borderRadius: "15px", textAlign: "center", marginBottom: "15px" }}>
+                  <div style={{ fontSize: "48px", color: temp < 35 ? "#4ade80" : "#ff9500" }}>{temp}°C</div>
+                  <button onClick={() => setActiveMode(!activeMode)} style={{ marginTop: "10px", width: "100%", padding: "10px", background: activeMode ? "#ef4444" : "#ff9500", border: "none", color: "white", borderRadius: "8px", cursor: "pointer" }}>{activeMode ? "STOP COOLING" : "START HINA 28×"}</button>
+                </div>
+                {COOLING_TIPS_DATA.map(tip => (
+                  <div key={tip.id} onClick={() => setCheckedTips(p => ({ ...p, [tip.id]: !p[tip.id] }))} style={{ display: "flex", justifyContent: "space-between", padding: "10px", background: "#111", marginBottom: "5px", borderRadius: "8px", cursor: "pointer", border: checkedTips[tip.id] ? "1px solid #ff9500" : "1px solid transparent" }}>
+                    <span>{tip.icon} {tip.title}</span>
+                    <span style={{ color: "#ff9500" }}>-{tip.saving}°C</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {tab === "cross" && (
+              <div style={{ background: "#111", padding: "15px", borderRadius: "15px" }}>
+                <div style={{ display: "flex", justifyContent: "center", marginBottom: "15px" }}>
+                  <CrosshairPreview cfg={crosshair} size={150} />
+                </div>
+                <Slider label="GAP" value={crosshair.gap} min={0} max={20} onChange={v => setCrosshair(p => ({ ...p, gap: v }))} />
+                <Slider label="LENGTH" value={crosshair.length} min={2} max={30} onChange={v => setCrosshair(p => ({ ...p, length: v }))} />
+              </div>
+            )}
+
+            {tab === "aim" && <AimTrainer crosshairCfg={crosshair} />}
+            
+            {tab === "pubg" && (
+              <div>
+                {PUBG_TIPS.map((tip, i) => (
+                  <div key={i} style={{ padding: "15px", background: "#111", marginBottom: "10px", borderRadius: "10px", borderLeft: `4px solid ${TAG_COLORS[tip.tag]}` }}>
+                    <div style={{ fontWeight: "bold" }}>{tip.icon} {tip.title}</div>
+                    <div style={{ fontSize: "12px", color: "#a0a0a0" }}>{tip.tip}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
